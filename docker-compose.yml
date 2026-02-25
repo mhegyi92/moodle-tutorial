@@ -117,11 +117,36 @@ services:
     networks:
       - moodle-network
 
+  ollama:
+    image: ollama/ollama:0.5.13
+    container_name: moodle-ollama
+    ports:
+      - "11434:11434"   # API
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - moodle-network
+    # Uncomment below for GPU support (NVIDIA)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
 volumes:
   moodle_data:
   moodle_html:
   mariadb_data:
   redis_data:
+  ollama_data:
 
 networks:
   moodle-network:

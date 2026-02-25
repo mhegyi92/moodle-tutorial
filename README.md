@@ -5,35 +5,36 @@ A self-contained Moodle development environment using Docker.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Docker Network                          │
-│                    (moodle-network)                         │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐               │
-│  │  moodle  │    │ mariadb  │    │  redis   │               │
-│  │          │───▶│          │    │          │               │
-│  │ Apache + │    │ Database │    │  Cache   │               │
-│  │  PHP 8.3 │───────────────────▶│ Sessions │               │
-│  │          │    │          │    │          │               │
-│  └────┬─────┘    └──────────┘    └──────────┘               │
-│       │                                                     │
-│       │ Port 80                                             │
-│       ▼                                                     │
-│  ┌──────────┐    ┌──────────┐                               │
-│  │   cron   │    │ mailpit  │                               │
-│  │          │    │          │                               │
-│  │ Scheduled│    │  Email   │◀─── Port 8025 (Web UI)        │
-│  │  Tasks   │    │ Testing  │◀─── Port 1025 (SMTP)          │
-│  └──────────┘    └──────────┘                               │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        Docker Network                             │
+│                       (moodle-network)                            │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐    │
+│  │  moodle  │    │ mariadb  │    │  redis   │    │  ollama  │    │
+│  │          │───▶│          │    │          │    │          │    │
+│  │ Apache + │    │ Database │    │  Cache   │    │  Local   │    │
+│  │  PHP 8.3 │───────────────────▶│ Sessions │    │   LLM    │    │
+│  │          │─────────────────────────────────────▶│          │    │
+│  └────┬─────┘    └──────────┘    └──────────┘    └──────────┘    │
+│       │                                               ▲           │
+│       │ Port 80                                Port 11434 (API)   │
+│       ▼                                                           │
+│  ┌──────────┐    ┌──────────┐                                    │
+│  │   cron   │    │ mailpit  │                                    │
+│  │          │    │          │                                    │
+│  │ Scheduled│    │  Email   │◀─── Port 8025 (Web UI)             │
+│  │  Tasks   │    │ Testing  │◀─── Port 1025 (SMTP)               │
+│  └──────────┘    └──────────┘                                    │
+│                                                                   │
+└──────────────────────────────────────────────────────────────────┘
 
 Volumes:
   moodle_data   → /var/www/moodledata (uploads, cache, sessions)
   moodle_html   → /var/www/html (Moodle code)
   mariadb_data  → /var/lib/mysql (database files)
   redis_data    → /data (cache persistence)
+  ollama_data   → /root/.ollama (LLM models)
 ```
 
 ## Components
@@ -43,6 +44,7 @@ Volumes:
 | **moodle** | Custom (PHP 8.3 + Apache) | Main Moodle application |
 | **mariadb** | mariadb:10.11.11 | Database (LTS version) |
 | **redis** | redis:7.4-alpine | Session and application cache |
+| **ollama** | ollama/ollama:0.5.13 | Local LLM for AI features |
 | **cron** | Same as moodle | Runs scheduled tasks every 60 seconds |
 | **mailpit** | axllent/mailpit:v1.21 | Catches all outgoing emails for testing |
 
@@ -89,12 +91,22 @@ Development environments shouldn't send real emails. Mailpit:
 - Provides a web UI to view emails
 - Helps test password resets, notifications, forum emails
 
+### Why Ollama?
+
+Ollama provides local LLM capabilities for Moodle's AI features:
+- No external API costs (runs locally)
+- Data privacy (nothing leaves your server)
+- Works offline
+- Supported natively by Moodle 4.5+ AI subsystem
+- Can run models like Llama 3, Mistral, Phi, etc.
+
 ## Setup
 
 ### Prerequisites
 
 - Docker and Docker Compose installed
-- Ports 80, 1025, and 8025 available
+- Ports 80, 1025, 8025, and 11434 available
+- For GPU acceleration (optional): NVIDIA GPU with drivers and nvidia-container-toolkit
 
 ### Installation
 
@@ -167,6 +179,10 @@ docker exec -it moodle-mariadb mariadb -u moodleuser -pmoodlepass moodle
 
 # Redis CLI
 docker exec -it moodle-redis redis-cli
+
+# Ollama CLI
+docker exec -it moodle-ollama ollama list
+docker exec -it moodle-ollama ollama run llama3.2
 ```
 
 ### Email Testing
@@ -194,6 +210,58 @@ cd /var/www/html/theme  # for themes
 # Download and extract plugin
 # Then visit Site Administration → Notifications to complete installation
 ```
+
+### Using Ollama (Local LLM)
+
+#### Pull a Model
+
+```bash
+# Pull a model (first time only, models are persisted in volume)
+docker exec -it moodle-ollama ollama pull llama3.2
+
+# List available models
+docker exec -it moodle-ollama ollama list
+
+# Test a model
+docker exec -it moodle-ollama ollama run llama3.2 "Hello, what can you do?"
+```
+
+#### Popular Models
+
+| Model | Size | Best For |
+|-------|------|----------|
+| `llama3.2` | 2GB | General purpose, fast |
+| `llama3.2:1b` | 1.3GB | Lightweight, very fast |
+| `mistral` | 4GB | Good balance of speed/quality |
+| `phi3` | 2.2GB | Microsoft's small model |
+| `gemma2:2b` | 1.6GB | Google's lightweight model |
+
+#### Configure in Moodle
+
+1. Go to Site Administration → General → AI
+2. Add a new AI Provider → Select "Ollama"
+3. Configure:
+   - Name: `Local Ollama`
+   - API endpoint: `http://ollama:11434/api/generate`
+4. Enable AI placements in Site Administration → General → AI placements
+
+#### GPU Acceleration
+
+For NVIDIA GPU support, uncomment the `deploy` section in `docker-compose.yml`:
+
+```yaml
+ollama:
+  # ... other config ...
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+```
+
+Requires nvidia-container-toolkit installed on the host.
 
 ## Troubleshooting
 
@@ -289,6 +357,29 @@ The cron container waits 120 seconds after startup before running.
    ```
 3. Increase PHP memory limit in Dockerfile if needed
 
+### Ollama Not Responding
+
+1. Check if Ollama is running:
+   ```bash
+   docker compose ps ollama
+   curl http://localhost:11434/api/tags
+   ```
+
+2. Check if a model is pulled:
+   ```bash
+   docker exec -it moodle-ollama ollama list
+   ```
+
+3. Check Ollama logs:
+   ```bash
+   docker compose logs ollama
+   ```
+
+4. If no models, pull one:
+   ```bash
+   docker exec -it moodle-ollama ollama pull llama3.2
+   ```
+
 ### Reset Everything
 
 To start completely fresh:
@@ -342,3 +433,6 @@ docker compose up -d --build
 - [Moodle Documentation](https://docs.moodle.org/)
 - [MoodleHQ Docker Images](https://github.com/moodlehq/moodle-php-apache)
 - [Moodle CLI Scripts](https://docs.moodle.org/en/Administration_via_command_line)
+- [Moodle AI Tools](https://docs.moodle.org/501/en/AI_tools)
+- [Moodle Ollama Provider](https://docs.moodle.org/501/en/Ollama_API_provider)
+- [Ollama Models Library](https://ollama.com/library)
