@@ -1,6 +1,18 @@
 #!/bin/bash
 set -e
 
+# Check if Moodle code exists, if not clone it
+if [ ! -f /var/www/html/version.php ]; then
+    echo "Moodle code not found, cloning..."
+    MOODLE_VERSION="${MOODLE_VERSION:-MOODLE_500_STABLE}"
+    git clone --depth 1 --branch "$MOODLE_VERSION" https://github.com/moodle/moodle.git /tmp/moodle
+    cp -r /tmp/moodle/. /var/www/html/
+    rm -rf /tmp/moodle
+    chown -R www-data:www-data /var/www/html
+    chmod -R 755 /var/www/html
+    echo "Moodle code cloned successfully"
+fi
+
 # Wait for database to be ready
 echo "Waiting for database connection..."
 max_attempts=30
@@ -91,9 +103,68 @@ if [ -n "$MOODLE_SMTP_HOST" ]; then
     echo "SMTP Host: $MOODLE_SMTP_HOST:${MOODLE_SMTP_PORT:-1025}"
 fi
 
+# Configure PHPUnit and Behat for development
+if [ -n "$MOODLE_DEBUG" ]; then
+    echo "Configuring development/testing environment..."
+
+    if ! grep -q "phpunit_dataroot" /var/www/html/config.php; then
+        # Remove the closing require_once line temporarily
+        sed -i '/require_once.*setup.php/d' /var/www/html/config.php
+
+        # Add PHPUnit and Behat configuration
+        cat >> /var/www/html/config.php << 'EOF'
+
+// PHPUnit configuration
+$CFG->phpunit_dataroot = '/var/www/phpunitdata';
+$CFG->phpunit_prefix = 'phpu_';
+
+// Behat configuration
+$CFG->behat_dataroot = '/var/www/behatdata';
+$CFG->behat_wwwroot = 'http://moodle';
+$CFG->behat_prefix = 'behat_';
+$CFG->behat_profiles = [
+    'default' => [
+        'browser' => 'chrome',
+        'wd_host' => 'http://selenium:4444/wd/hub',
+    ],
+];
+$CFG->behat_faildump_path = '/var/www/behatfaildumps';
+
+// Development settings
+$CFG->debug = E_ALL;
+$CFG->debugdisplay = 1;
+$CFG->debugstringids = 1;
+$CFG->perfdebug = 15;
+$CFG->debugpageinfo = 1;
+$CFG->allowthemechangeonurl = 1;
+$CFG->passwordpolicy = 0;
+$CFG->cronclionly = 0;
+$CFG->pathtophp = '/usr/bin/php';
+
+require_once(__DIR__ . '/lib/setup.php');
+EOF
+        echo "Development configuration added"
+    fi
+fi
+
 # Ensure proper permissions
 chown -R www-data:www-data /var/www/moodledata
 chmod -R 755 /var/www/moodledata
+
+if [ -d /var/www/phpunitdata ]; then
+    chown -R www-data:www-data /var/www/phpunitdata
+    chmod -R 755 /var/www/phpunitdata
+fi
+
+if [ -d /var/www/behatdata ]; then
+    chown -R www-data:www-data /var/www/behatdata
+    chmod -R 755 /var/www/behatdata
+fi
+
+if [ -d /var/www/behatfaildumps ]; then
+    chown -R www-data:www-data /var/www/behatfaildumps
+    chmod -R 755 /var/www/behatfaildumps
+fi
 
 echo "Starting Apache..."
 exec "$@"

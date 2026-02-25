@@ -1,0 +1,56 @@
+# Development overrides for plugin development
+# This file is automatically loaded by Docker Compose
+
+services:
+  moodle:
+    environment:
+      # Enable Xdebug for debugging
+      PHP_EXTENSION_xdebug: 1
+      # Enable code coverage with pcov
+      PHP_INI-pcov.enabled: 1
+      # Development mode settings
+      MOODLE_DEBUG: "true"
+    volumes:
+      # Mount local Moodle code (clone with: git clone --branch MOODLE_500_STABLE https://github.com/moodle/moodle.git moodle)
+      - ./moodle:/var/www/html
+
+      # Mount local plugins (uncomment and adjust path)
+      # - ./plugins/local_myplugin:/var/www/html/local/myplugin
+      # - ./plugins/mod_myactivity:/var/www/html/mod/myactivity
+      # - ./plugins/block_myblock:/var/www/html/blocks/myblock
+
+      # Keep moodledata in a volume
+      - moodle_data:/var/www/moodledata
+
+      # Mount PHPUnit and Behat data directories
+      - phpunit_data:/var/www/phpunitdata
+      - behat_data:/var/www/behatdata
+      - behat_faildumps:/var/www/behatfaildumps
+    extra_hosts:
+      # Required for Xdebug to connect back to host IDE
+      - "host.docker.internal:host-gateway"
+
+  cron:
+    volumes:
+      - ./moodle:/var/www/html
+      - moodle_data:/var/www/moodledata
+
+  # Selenium for Behat acceptance testing
+  selenium:
+    image: selenium/standalone-chrome:131.0
+    container_name: moodle-selenium
+    ports:
+      - "4444:4444"   # Selenium hub
+      - "7900:7900"   # noVNC (view tests in browser)
+    shm_size: 2gb
+    environment:
+      - SE_NODE_MAX_SESSIONS=2
+      - SE_VNC_NO_PASSWORD=1
+    restart: unless-stopped
+    networks:
+      - moodle-network
+
+volumes:
+  phpunit_data:
+  behat_data:
+  behat_faildumps:

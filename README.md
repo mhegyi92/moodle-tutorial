@@ -1,6 +1,66 @@
-# Moodle Docker Setup
+# Moodle Docker Development Environment
 
-A self-contained Moodle development environment using Docker.
+A complete Moodle development environment using Docker. This setup is designed for plugin development with debugging, testing, and local AI capabilities.
+
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
+- [Directory Structure](#directory-structure)
+- [File Explanations](#file-explanations)
+- [Configuration Options](#configuration-options)
+- [Plugin Development](#plugin-development)
+- [Testing](#testing)
+- [Debugging](#debugging)
+- [AI Integration (Ollama)](#ai-integration-ollama)
+- [Common Tasks](#common-tasks)
+- [Troubleshooting](#troubleshooting)
+- [Resources](#resources)
+
+---
+
+## Quick Start
+
+### 1. Prerequisites
+
+Install these before starting:
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/Mac) or Docker Engine (Linux)
+- [Git](https://git-scm.com/downloads)
+- A code editor ([VS Code](https://code.visualstudio.com/) recommended)
+
+### 2. Clone and Setup
+
+```bash
+# Clone this repository
+git clone https://github.com/mhegyi92/moodle-tutorial.git
+cd moodle-tutorial
+
+# Clone Moodle code (this takes a few minutes)
+git clone --branch MOODLE_500_STABLE --depth 1 https://github.com/moodle/moodle.git moodle
+
+# Start everything
+docker compose up -d --build
+```
+
+### 3. Wait for Installation
+
+First startup takes 3-5 minutes. Watch the progress:
+```bash
+docker compose logs -f moodle
+```
+
+When you see `Starting Apache...`, Moodle is ready.
+
+### 4. Access Moodle
+
+Open http://localhost in your browser.
+
+**Login credentials:**
+| Username | Password |
+|----------|----------|
+| `admin` | `Admin123!` |
+
+---
 
 ## Architecture
 
@@ -20,238 +80,191 @@ A self-contained Moodle development environment using Docker.
 │       │                                               ▲           │
 │       │ Port 80                                Port 11434 (API)   │
 │       ▼                                                           │
-│  ┌──────────┐    ┌──────────┐                                    │
-│  │   cron   │    │ mailpit  │                                    │
-│  │          │    │          │                                    │
-│  │ Scheduled│    │  Email   │◀─── Port 8025 (Web UI)             │
-│  │  Tasks   │    │ Testing  │◀─── Port 1025 (SMTP)               │
-│  └──────────┘    └──────────┘                                    │
-│                                                                   │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐                    │
+│  │   cron   │    │ mailpit  │    │ selenium │                    │
+│  │          │    │          │    │          │                    │
+│  │ Scheduled│    │  Email   │    │  Behat   │                    │
+│  │  Tasks   │    │ Testing  │    │  Tests   │                    │
+│  └──────────┘    └──────────┘    └──────────┘                    │
+│                       │               │                           │
+│              Port 8025 (Web)   Port 7900 (VNC)                   │
 └──────────────────────────────────────────────────────────────────┘
-
-Volumes:
-  moodle_data   → /var/www/moodledata (uploads, cache, sessions)
-  moodle_html   → /var/www/html (Moodle code)
-  mariadb_data  → /var/lib/mysql (database files)
-  redis_data    → /data (cache persistence)
-  ollama_data   → /root/.ollama (LLM models)
 ```
 
-## Components
+### What Each Service Does
 
-| Service | Image | Purpose |
-|---------|-------|---------|
-| **moodle** | Custom (PHP 8.3 + Apache) | Main Moodle application |
-| **mariadb** | mariadb:10.11.11 | Database (LTS version) |
-| **redis** | redis:7.4-alpine | Session and application cache |
-| **ollama** | ollama/ollama:0.5.13 | Local LLM for AI features |
-| **cron** | Same as moodle | Runs scheduled tasks every 60 seconds |
-| **mailpit** | axllent/mailpit:v1.21 | Catches all outgoing emails for testing |
+| Service | Purpose | When You Need It |
+|---------|---------|------------------|
+| **moodle** | The main Moodle website | Always |
+| **mariadb** | Stores all Moodle data (users, courses, etc.) | Always |
+| **redis** | Makes Moodle faster by caching data | Always |
+| **cron** | Runs background tasks (emails, cleanup) | Always |
+| **mailpit** | Catches test emails so you can view them | When testing email features |
+| **ollama** | Local AI for Moodle's AI features | When developing AI plugins |
+| **selenium** | Runs automated browser tests | When running Behat tests |
 
-## Design Decisions
+---
 
-### Why Custom Dockerfile?
+## Directory Structure
 
-The Bitnami Moodle image is being discontinued (August 2025). Building our own image based on the official MoodleHQ PHP/Apache image gives us:
+```
+moodle-tutorial/
+│
+├── moodle/                         # Moodle source code (you clone this)
+│   ├── admin/                      # Admin scripts and pages
+│   ├── blocks/                     # Block plugins
+│   ├── local/                      # Local plugins (most common for custom development)
+│   ├── mod/                        # Activity modules
+│   ├── question/type/              # Question types
+│   ├── theme/                      # Themes
+│   └── ...                         # Many more directories
+│
+├── plugins/                        # Your plugin development folder
+│   └── local_myplugin/             # Example: your local plugin
+│
+├── docker-compose.yml              # Main Docker configuration
+├── docker-compose.override.yml     # Development settings (Xdebug, Selenium, etc.)
+├── Dockerfile                      # How to build the Moodle container
+├── docker-entrypoint.sh            # Startup script that installs Moodle
+├── .gitignore                      # Files Git should ignore
+├── .gitattributes                  # Git line ending settings (important for Windows)
+└── README.md                       # This file
+```
 
-- Long-term maintainability
-- Full control over installed packages
-- Ability to add custom tools (Python for future integrations)
-- Pinned versions for reproducibility
+---
 
-### Why MariaDB 10.11?
+## File Explanations
 
-- Long Term Support (LTS) version
-- Officially supported by Moodle
-- UTF8MB4 support for full unicode (emojis, special characters)
+### `docker-compose.yml` - Main Configuration
 
-### Why Redis?
+This file defines all the services (containers) that make up the environment.
 
-Per official Moodle documentation: "The single biggest improvement to a Moodle site can be installing Redis."
+**Key sections:**
+```yaml
+services:
+  moodle:                    # The main Moodle container
+    build: ...               # How to build it
+    ports:
+      - "80:80"              # Access on http://localhost
+    environment:             # Settings passed to Moodle
+      MOODLE_DB_HOST: mariadb
+      MOODLE_ADMIN_PASSWORD: Admin123!
+    volumes:                 # Folders shared with your computer
+      - moodle_data:/var/www/moodledata
+```
 
-Redis handles:
-- Session storage (faster than database sessions)
-- Application cache (reduces database load)
-- Locking (prevents race conditions)
+**To change Moodle version:**
+```yaml
+args:
+  MOODLE_VERSION: "MOODLE_405_STABLE"  # Change this line
+```
 
-### Why Separate Cron Container?
+### `docker-compose.override.yml` - Development Settings
 
-Moodle requires cron to run every minute for:
-- Sending forum notification emails
-- Processing assignment submissions
-- Running scheduled backups
-- Cleaning up temporary files
+This file **automatically loads** when you run `docker compose up`. It adds:
+- Xdebug for debugging
+- Selenium for browser tests
+- Local code mounting
 
-A separate container keeps concerns isolated and makes logs easier to read.
-
-### Why Mailpit?
-
-Development environments shouldn't send real emails. Mailpit:
-- Catches all outgoing SMTP mail
-- Provides a web UI to view emails
-- Helps test password resets, notifications, forum emails
-
-### Why Ollama?
-
-Ollama provides local LLM capabilities for Moodle's AI features:
-- No external API costs (runs locally)
-- Data privacy (nothing leaves your server)
-- Works offline
-- Supported natively by Moodle 4.5+ AI subsystem
-- Can run models like Llama 3, Mistral, Phi, etc.
-
-## Setup
-
-### Prerequisites
-
-- Docker and Docker Compose installed
-- Ports 80, 1025, 8025, and 11434 available
-- For GPU acceleration (optional): NVIDIA GPU with drivers and nvidia-container-toolkit
-
-### Installation
-
-1. Clone or download this repository
-
-2. Build and start the containers:
-   ```bash
-   docker compose up -d --build
-   ```
-
-3. Wait for installation to complete (first run takes several minutes):
-   ```bash
-   docker compose logs -f moodle
-   ```
-
-   Look for: `Starting Apache...`
-
-4. Access Moodle at http://localhost
-
-### Default Credentials
-
-| Service | Username | Password |
-|---------|----------|----------|
-| Moodle Admin | `admin` | `Admin123!` |
-| MariaDB | `moodleuser` | `moodlepass` |
-| MariaDB Root | `root` | `rootpassword` |
-
-## Usage
-
-### Starting and Stopping
-
+**To disable development features:**
 ```bash
-# Start all services
-docker compose up -d
-
-# Stop all services (keeps data)
-docker compose stop
-
-# Stop and remove containers (keeps data in volumes)
-docker compose down
-
-# Stop and remove everything including data
-docker compose down -v
+# Run without the override file
+docker compose -f docker-compose.yml up -d
 ```
 
-### Viewing Logs
-
-```bash
-# All services
-docker compose logs -f
-
-# Specific service
-docker compose logs -f moodle
-docker compose logs -f mariadb
-docker compose logs -f cron
+**To mount your plugin:**
+```yaml
+volumes:
+  - ./moodle:/var/www/html
+  - ./plugins/local_myplugin:/var/www/html/local/myplugin  # Add this line
 ```
 
-### Accessing Containers
+### `Dockerfile` - Container Build Instructions
 
-```bash
-# Moodle container shell
-docker exec -it moodle bash
+Defines how to build the Moodle container:
+- Based on official MoodleHQ PHP/Apache image
+- Installs additional tools (git, python, etc.)
+- Sets PHP configuration
 
-# Run Moodle CLI commands
-docker exec -it moodle php /var/www/html/admin/cli/cron.php
-docker exec -it moodle php /var/www/html/admin/cli/purge_caches.php
+**You rarely need to edit this** unless adding system packages.
 
-# MariaDB shell
-docker exec -it moodle-mariadb mariadb -u moodleuser -pmoodlepass moodle
+### `docker-entrypoint.sh` - Startup Script
 
-# Redis CLI
-docker exec -it moodle-redis redis-cli
+Runs every time the container starts:
+1. Clones Moodle if code not found
+2. Waits for database to be ready
+3. Installs Moodle (first run only)
+4. Configures Redis caching
+5. Sets up PHPUnit/Behat (if MOODLE_DEBUG=true)
 
-# Ollama CLI
-docker exec -it moodle-ollama ollama list
-docker exec -it moodle-ollama ollama run llama3.2
+---
+
+## Configuration Options
+
+### Environment Variables
+
+Edit these in `docker-compose.yml` under `moodle: environment:`
+
+| Variable | Default | What It Does |
+|----------|---------|--------------|
+| `MOODLE_URL` | `http://localhost` | The site URL |
+| `MOODLE_ADMIN_USER` | `admin` | Admin username |
+| `MOODLE_ADMIN_PASSWORD` | `Admin123!` | Admin password |
+| `MOODLE_ADMIN_EMAIL` | `admin@example.com` | Admin email |
+| `MOODLE_SITE_NAME` | `Moodle Development` | Site name shown in browser |
+| `MOODLE_DB_TYPE` | `mariadb` | Database type |
+| `MOODLE_DB_HOST` | `mariadb` | Database server |
+| `MOODLE_DB_NAME` | `moodle` | Database name |
+| `MOODLE_DB_USER` | `moodleuser` | Database username |
+| `MOODLE_DB_PASSWORD` | `moodlepass` | Database password |
+| `MOODLE_REDIS_HOST` | `redis` | Redis server for caching |
+| `MOODLE_SMTP_HOST` | `mailpit` | Email server |
+
+### Enabling/Disabling Features
+
+#### Xdebug (Debugging)
+
+**Enabled by default** in `docker-compose.override.yml`:
+```yaml
+environment:
+  PHP_EXTENSION_xdebug: 1    # 1 = enabled, 0 = disabled
 ```
 
-### Email Testing
-
-1. Open http://localhost:8025 (Mailpit Web UI)
-2. Trigger an email in Moodle (e.g., password reset)
-3. View the captured email in Mailpit
-
-Note: SMTP must be configured in Moodle admin:
-- Site Administration → Server → Email → Outgoing mail configuration
-- SMTP Host: `mailpit`
-- SMTP Port: `1025`
-
-### Installing Plugins
-
-```bash
-# Enter the container
-docker exec -it moodle bash
-
-# Navigate to the appropriate directory
-cd /var/www/html/mod  # for activity modules
-cd /var/www/html/blocks  # for blocks
-cd /var/www/html/theme  # for themes
-
-# Download and extract plugin
-# Then visit Site Administration → Notifications to complete installation
+To disable (faster performance):
+```yaml
+  PHP_EXTENSION_xdebug: 0
 ```
 
-### Using Ollama (Local LLM)
+#### Development Mode (Debug Output)
 
-#### Pull a Model
-
-```bash
-# Pull a model (first time only, models are persisted in volume)
-docker exec -it moodle-ollama ollama pull llama3.2
-
-# List available models
-docker exec -it moodle-ollama ollama list
-
-# Test a model
-docker exec -it moodle-ollama ollama run llama3.2 "Hello, what can you do?"
+**Enabled by default** in `docker-compose.override.yml`:
+```yaml
+environment:
+  MOODLE_DEBUG: "true"       # Shows detailed errors
 ```
 
-#### Popular Models
+To disable:
+```yaml
+  MOODLE_DEBUG: "false"
+```
 
-| Model | Size | Best For |
-|-------|------|----------|
-| `llama3.2` | 2GB | General purpose, fast |
-| `llama3.2:1b` | 1.3GB | Lightweight, very fast |
-| `mistral` | 4GB | Good balance of speed/quality |
-| `phi3` | 2.2GB | Microsoft's small model |
-| `gemma2:2b` | 1.6GB | Google's lightweight model |
+#### Selenium (Browser Tests)
 
-#### Configure in Moodle
+**Enabled by default** in `docker-compose.override.yml`. To disable, comment out:
+```yaml
+# selenium:
+#   image: selenium/standalone-chrome:131.0
+#   ...
+```
 
-1. Go to Site Administration → General → AI
-2. Add a new AI Provider → Select "Ollama"
-3. Configure:
-   - Name: `Local Ollama`
-   - API endpoint: `http://ollama:11434/api/generate`
-4. Enable AI placements in Site Administration → General → AI placements
+#### GPU Acceleration for Ollama
 
-#### GPU Acceleration
+**Disabled by default**. To enable (requires NVIDIA GPU):
 
-For NVIDIA GPU support, uncomment the `deploy` section in `docker-compose.yml`:
-
+In `docker-compose.yml`, uncomment:
 ```yaml
 ollama:
-  # ... other config ...
+  # ...
   deploy:
     resources:
       reservations:
@@ -261,178 +274,376 @@ ollama:
             capabilities: [gpu]
 ```
 
-Requires nvidia-container-toolkit installed on the host.
+---
+
+## Plugin Development
+
+### Creating a New Plugin
+
+1. Create your plugin folder:
+   ```bash
+   mkdir -p plugins/local_myplugin
+   ```
+
+2. Add required files (minimum):
+   ```
+   plugins/local_myplugin/
+   ├── version.php          # Plugin version info (required)
+   ├── lang/
+   │   └── en/
+   │       └── local_myplugin.php  # English strings
+   └── db/
+       └── access.php       # Permissions (if needed)
+   ```
+
+3. Mount it in `docker-compose.override.yml`:
+   ```yaml
+   volumes:
+     - ./moodle:/var/www/html
+     - ./plugins/local_myplugin:/var/www/html/local/myplugin
+   ```
+
+4. Restart containers:
+   ```bash
+   docker compose down && docker compose up -d
+   ```
+
+5. Install the plugin:
+   - Go to http://localhost/admin
+   - Moodle will detect the new plugin
+   - Click "Upgrade Moodle database"
+
+### Plugin Types and Locations
+
+| Plugin Type | Folder | Example |
+|-------------|--------|---------|
+| Local plugins | `local/` | `local/myplugin` |
+| Activity modules | `mod/` | `mod/myactivity` |
+| Blocks | `blocks/` | `blocks/myblock` |
+| Question types | `question/type/` | `question/type/myquestion` |
+| Themes | `theme/` | `theme/mytheme` |
+| Authentication | `auth/` | `auth/myauth` |
+| Enrolment | `enrol/` | `enrol/myenrol` |
+| Reports | `report/` | `report/myreport` |
+
+### Editing Code
+
+Your code in `./moodle` and `./plugins` is **live mounted**:
+- Edit files with your IDE
+- Changes appear immediately (no restart needed)
+- For PHP changes, just refresh the browser
+- For JavaScript, you may need to purge caches (see Common Tasks)
+
+---
+
+## Testing
+
+### PHPUnit (Unit Tests)
+
+Unit tests check individual functions work correctly.
+
+```bash
+# Initialize PHPUnit (first time only)
+docker exec -it moodle php admin/tool/phpunit/cli/init.php
+
+# Run all tests for your plugin
+docker exec -it moodle vendor/bin/phpunit --testsuite local_myplugin_testsuite
+
+# Run a specific test file
+docker exec -it moodle vendor/bin/phpunit local/myplugin/tests/mytest_test.php
+
+# Run with code coverage report
+docker exec -it moodle php -d pcov.enabled=1 vendor/bin/phpunit --coverage-text local/myplugin/tests/
+```
+
+### Behat (Browser Tests)
+
+Behat tests simulate real user interactions in a browser.
+
+```bash
+# Initialize Behat (first time only)
+docker exec -it moodle php admin/tool/behat/cli/init.php
+
+# Run all tests for your plugin
+docker exec -it -u www-data moodle php admin/tool/behat/cli/run.php --tags=@local_myplugin
+
+# Run a specific feature file
+docker exec -it -u www-data moodle php admin/tool/behat/cli/run.php --feature=local/myplugin/tests/behat/myfeature.feature
+```
+
+**Watch tests in browser:** Open http://localhost:7900 (no password needed)
+
+---
+
+## Debugging
+
+### Xdebug Setup
+
+Xdebug lets you pause code execution and inspect variables.
+
+#### VS Code Setup
+
+1. Install the "PHP Debug" extension
+
+2. Create `.vscode/launch.json`:
+   ```json
+   {
+     "version": "0.2.0",
+     "configurations": [
+       {
+         "name": "Listen for Xdebug",
+         "type": "php",
+         "request": "launch",
+         "port": 9003,
+         "pathMappings": {
+           "/var/www/html": "${workspaceFolder}/moodle",
+           "/var/www/html/local/myplugin": "${workspaceFolder}/plugins/local_myplugin"
+         }
+       }
+     ]
+   }
+   ```
+
+3. Click "Run and Debug" → "Listen for Xdebug"
+
+4. Set breakpoints in your code (click left of line numbers)
+
+5. Load a page in browser - VS Code will pause at breakpoints
+
+#### PhpStorm Setup
+
+1. Go to Settings → PHP → Debug
+2. Set Xdebug port to `9003`
+3. Go to Settings → PHP → Servers
+4. Add server:
+   - Name: `moodle`
+   - Host: `localhost`
+   - Port: `80`
+   - Path mappings:
+     - `/var/www/html` → `your-project/moodle`
+5. Click "Start Listening for PHP Debug Connections" (phone icon)
+
+### Viewing Logs
+
+```bash
+# All containers
+docker compose logs -f
+
+# Specific container
+docker compose logs -f moodle
+docker compose logs -f mariadb
+
+# Moodle log file
+docker exec -it moodle tail -f /var/www/moodledata/moodle.log
+```
+
+---
+
+## AI Integration (Ollama)
+
+Ollama runs AI models locally for Moodle's AI features.
+
+### Pull a Model
+
+```bash
+# Small and fast (recommended to start)
+docker exec -it moodle-ollama ollama pull llama3.2:1b
+
+# Better quality, slower
+docker exec -it moodle-ollama ollama pull llama3.2
+
+# List installed models
+docker exec -it moodle-ollama ollama list
+```
+
+### Configure in Moodle
+
+1. Go to **Site Administration → General → AI**
+2. Click **"Add a new AI provider instance"**
+3. Select **"Ollama"**
+4. Configure:
+   - Name: `Local Ollama`
+   - API endpoint: `http://ollama:11434/api/generate`
+5. Click **"Create instance"**
+6. Go to **Site Administration → General → AI placements**
+7. Enable the placements you want
+
+### Test It Works
+
+```bash
+curl http://localhost:11434/api/generate -d '{
+  "model": "llama3.2:1b",
+  "prompt": "Say hello",
+  "stream": false
+}'
+```
+
+---
+
+## Common Tasks
+
+### Start/Stop Environment
+
+```bash
+# Start
+docker compose up -d
+
+# Stop (keeps data)
+docker compose stop
+
+# Stop and remove containers (keeps data in volumes)
+docker compose down
+
+# Stop and DELETE ALL DATA
+docker compose down -v
+```
+
+### Rebuild After Changes
+
+```bash
+# Rebuild containers
+docker compose up -d --build
+```
+
+### Purge Moodle Caches
+
+```bash
+docker exec -it moodle php admin/cli/purge_caches.php
+```
+
+### Access Container Shell
+
+```bash
+# Moodle container
+docker exec -it moodle bash
+
+# Database
+docker exec -it moodle-mariadb mariadb -u moodleuser -pmoodlepass moodle
+
+# Redis
+docker exec -it moodle-redis redis-cli
+```
+
+### View Emails
+
+Open http://localhost:8025 to see all emails sent by Moodle.
+
+### Run Moodle CLI Commands
+
+```bash
+# Upgrade database
+docker exec -it moodle php admin/cli/upgrade.php
+
+# Run cron manually
+docker exec -it moodle php admin/cli/cron.php
+
+# Create a user
+docker exec -it moodle php admin/cli/create_user.php --username=test --password=Test123! --email=test@example.com --firstname=Test --lastname=User
+```
+
+### Check Container Status
+
+```bash
+docker compose ps
+```
+
+---
 
 ## Troubleshooting
 
-### Container won't start
+### Container Won't Start
 
-Check if ports are already in use:
 ```bash
-# Check port 80
-sudo lsof -i :80
+# Check what's wrong
+docker compose logs moodle
 
-# Check port 8025
-sudo lsof -i :8025
+# Check if ports are in use
+# Linux/Mac:
+lsof -i :80
+# Windows (PowerShell):
+netstat -ano | findstr :80
 ```
 
 ### 403 Forbidden Error
 
-The Apache document root may not be set. Check logs:
+The Moodle code might be missing:
 ```bash
-docker compose logs moodle | grep -i error
-```
+# Check if moodle folder exists and has files
+ls moodle/
 
-If you see `APACHE_DOCUMENT_ROOT is not defined`, rebuild:
-```bash
-docker compose down
-docker compose up -d --build
+# If empty, clone it
+git clone --branch MOODLE_500_STABLE --depth 1 https://github.com/moodle/moodle.git moodle
 ```
 
 ### Database Connection Failed
 
-1. Check if MariaDB is healthy:
-   ```bash
-   docker compose ps
-   ```
-
-2. Check MariaDB logs:
-   ```bash
-   docker compose logs mariadb
-   ```
-
-3. Verify credentials match in `docker-compose.yml`
-
-### Moodle Shows Installation Page Again
-
-The config.php may be missing. Check if volumes are intact:
 ```bash
-docker volume ls | grep moodle
+# Check if MariaDB is running
+docker compose ps mariadb
+
+# Check MariaDB logs
+docker compose logs mariadb
+
+# Verify it's healthy
+docker exec -it moodle-mariadb mariadb -u moodleuser -pmoodlepass -e "SELECT 1"
 ```
 
-If volumes were deleted, you'll need to reinstall:
+### "exec format error" on Windows
+
+Line endings issue. Fix:
 ```bash
-docker compose down -v
-docker compose up -d --build
+# Delete and re-clone
+rm -rf moodle-tutorial
+git clone https://github.com/mhegyi92/moodle-tutorial.git
 ```
-
-### Cron Not Running
-
-Check cron container status and logs:
-```bash
-docker compose ps cron
-docker compose logs cron
-```
-
-The cron container waits 120 seconds after startup before running.
-
-### Redis Not Working
-
-1. Check Redis is running:
-   ```bash
-   docker exec -it moodle-redis redis-cli ping
-   ```
-   Should return: `PONG`
-
-2. Check Redis config in Moodle:
-   ```bash
-   docker exec -it moodle grep -A5 "session_redis" /var/www/html/config.php
-   ```
-
-### Emails Not Appearing in Mailpit
-
-1. Verify Mailpit is running: http://localhost:8025
-2. Check SMTP settings in Moodle admin
-3. Check Moodle logs for email errors:
-   ```bash
-   docker exec -it moodle tail -f /var/www/moodledata/moodle.log
-   ```
-
-### Slow Performance
-
-1. Verify Redis is being used for caching
-2. Check available memory:
-   ```bash
-   docker stats
-   ```
-3. Increase PHP memory limit in Dockerfile if needed
-
-### Ollama Not Responding
-
-1. Check if Ollama is running:
-   ```bash
-   docker compose ps ollama
-   curl http://localhost:11434/api/tags
-   ```
-
-2. Check if a model is pulled:
-   ```bash
-   docker exec -it moodle-ollama ollama list
-   ```
-
-3. Check Ollama logs:
-   ```bash
-   docker compose logs ollama
-   ```
-
-4. If no models, pull one:
-   ```bash
-   docker exec -it moodle-ollama ollama pull llama3.2
-   ```
 
 ### Reset Everything
 
-To start completely fresh:
 ```bash
 docker compose down -v
+rm -rf moodle
+git clone --branch MOODLE_500_STABLE --depth 1 https://github.com/moodle/moodle.git moodle
 docker compose up -d --build
 ```
 
-This removes all data including the database and uploaded files.
+### Slow Performance
 
-## File Structure
+1. Disable Xdebug when not debugging:
+   ```yaml
+   # In docker-compose.override.yml
+   PHP_EXTENSION_xdebug: 0
+   ```
 
-```
-.
-├── Dockerfile              # Custom Moodle image definition
-├── docker-compose.yml      # Service definitions
-├── docker-entrypoint.sh    # Startup script (installs Moodle, configures Redis)
-└── README.md               # This file
-```
+2. On Windows/Mac, Docker can be slow with many files. Consider using WSL2 (Windows) or increasing Docker resources.
 
-## Customization
-
-### Changing Moodle Version
-
-Edit `docker-compose.yml`:
-```yaml
-args:
-  MOODLE_VERSION: "MOODLE_405_STABLE"  # for Moodle 4.5
-```
-
-Available branches: https://github.com/moodle/moodle/branches
-
-### Changing PHP Version
-
-Edit `docker-compose.yml`:
-```yaml
-args:
-  PHP_VERSION: "8.2"  # or 8.4
-```
-
-### Changing Credentials
-
-Edit the environment variables in `docker-compose.yml`, then rebuild:
-```bash
-docker compose down -v  # Warning: deletes all data
-docker compose up -d --build
-```
+---
 
 ## Resources
 
+### Official Documentation
 - [Moodle Documentation](https://docs.moodle.org/)
-- [MoodleHQ Docker Images](https://github.com/moodlehq/moodle-php-apache)
-- [Moodle CLI Scripts](https://docs.moodle.org/en/Administration_via_command_line)
+- [Moodle Developer Resources](https://moodledev.io/)
+- [Plugin Development Guide](https://moodledev.io/docs/apis)
+
+### Testing
+- [PHPUnit in Moodle](https://moodledev.io/docs/guides/phpunit)
+- [Behat in Moodle](https://moodledev.io/docs/guides/behat)
+
+### AI Features
 - [Moodle AI Tools](https://docs.moodle.org/501/en/AI_tools)
-- [Moodle Ollama Provider](https://docs.moodle.org/501/en/Ollama_API_provider)
+- [Ollama API Provider](https://docs.moodle.org/501/en/Ollama_API_provider)
 - [Ollama Models Library](https://ollama.com/library)
+
+### Docker
+- [MoodleHQ Docker Images](https://github.com/moodlehq/moodle-php-apache)
+- [Docker Compose Documentation](https://docs.docker.com/compose/)
+
+---
+
+## Default Credentials
+
+| Service | Username | Password |
+|---------|----------|----------|
+| Moodle Admin | `admin` | `Admin123!` |
+| MariaDB | `moodleuser` | `moodlepass` |
+| MariaDB Root | `root` | `rootpassword` |

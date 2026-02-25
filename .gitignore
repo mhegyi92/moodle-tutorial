@@ -8,3 +8,14 @@
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local Moodle code (clone with: git clone --branch MOODLE_500_STABLE https://github.com/moodle/moodle.git moodle)
+moodle/
+
+# Local plugins - keep the folder but ignore contents except .gitkeep
+plugins/*
+!plugins/.gitkeep
+
+# IDE settings (optional - you may want to commit these for team consistency)
+.vscode/
+.idea/

@@ -19,11 +19,16 @@ ENV PHP_INI-memory_limit=256M \
     PHP_INI-post_max_size=110M \
     PHP_INI-max_execution_time=300
 
+# Xdebug settings (disabled by default, enable with PHP_EXTENSION_xdebug=1)
+ENV XDEBUG_MODE=debug \
+    XDEBUG_CONFIG="client_host=host.docker.internal client_port=9003"
+
 # Install additional tools
 # git, unzip: for managing plugins
 # cron: for scheduled tasks
 # curl: for API requests
 # python3: for scripts and integrations
+# default-mysql-client: for database operations
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     unzip \
@@ -33,19 +38,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     python3-venv \
+    default-mysql-client \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Create data directory for Moodle uploads and cache
+# Create directories for Moodle data and testing
 RUN mkdir -p /var/www/moodledata \
+    && mkdir -p /var/www/phpunitdata \
+    && mkdir -p /var/www/behatdata \
+    && mkdir -p /var/www/behatfaildumps \
     && chown -R www-data:www-data /var/www/moodledata \
-    && chmod 755 /var/www/moodledata
+    && chown -R www-data:www-data /var/www/phpunitdata \
+    && chown -R www-data:www-data /var/www/behatdata \
+    && chown -R www-data:www-data /var/www/behatfaildumps \
+    && chmod 755 /var/www/moodledata \
+    && chmod 755 /var/www/phpunitdata \
+    && chmod 755 /var/www/behatdata \
+    && chmod 755 /var/www/behatfaildumps
 
-# Download Moodle from official repository
-WORKDIR /var/www/html
-RUN git clone --depth 1 --branch ${MOODLE_VERSION} https://github.com/moodle/moodle.git . \
+# Create html directory (Moodle code will be mounted or cloned at runtime)
+RUN mkdir -p /var/www/html \
     && chown -R www-data:www-data /var/www/html \
     && chmod -R 755 /var/www/html
+
+WORKDIR /var/www/html
 
 # Copy startup script
 COPY docker-entrypoint.sh /usr/local/bin/
