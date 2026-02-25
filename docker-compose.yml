@@ -1,0 +1,128 @@
+services:
+  moodle:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PHP_VERSION: "8.3"
+        MOODLE_VERSION: "MOODLE_500_STABLE"
+    container_name: moodle
+    ports:
+      - "80:80"
+    environment:
+      # Site configuration
+      MOODLE_URL: "http://localhost"
+      MOODLE_SITE_NAME: "Moodle Development"
+      MOODLE_SITE_SHORTNAME: "MoodleDev"
+      # Admin account
+      MOODLE_ADMIN_USER: admin
+      MOODLE_ADMIN_PASSWORD: Admin123!
+      MOODLE_ADMIN_EMAIL: admin@example.com
+      # Database connection
+      MOODLE_DB_TYPE: mariadb
+      MOODLE_DB_HOST: mariadb
+      MOODLE_DB_PORT: 3306
+      MOODLE_DB_NAME: moodle
+      MOODLE_DB_USER: moodleuser
+      MOODLE_DB_PASSWORD: moodlepass
+      # Redis cache
+      MOODLE_REDIS_HOST: redis
+      MOODLE_REDIS_PORT: 6379
+      # Email (Mailpit)
+      MOODLE_SMTP_HOST: mailpit
+      MOODLE_SMTP_PORT: 1025
+    volumes:
+      - moodle_data:/var/www/moodledata
+      - moodle_html:/var/www/html
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - moodle-network
+
+  mariadb:
+    image: mariadb:10.11.11
+    container_name: moodle-mariadb
+    environment:
+      MARIADB_ROOT_PASSWORD: rootpassword
+      MARIADB_DATABASE: moodle
+      MARIADB_USER: moodleuser
+      MARIADB_PASSWORD: moodlepass
+      MARIADB_CHARACTER_SET: utf8mb4
+      MARIADB_COLLATE: utf8mb4_unicode_ci
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - moodle-network
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: moodle-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - moodle-network
+
+  cron:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        PHP_VERSION: "8.3"
+        MOODLE_VERSION: "MOODLE_500_STABLE"
+    container_name: moodle-cron
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "Waiting for Moodle to initialize..."
+        sleep 120
+        echo "Starting cron loop (runs every 60 seconds)..."
+        while true; do
+          php /var/www/html/admin/cli/cron.php
+          sleep 60
+        done
+    volumes:
+      - moodle_data:/var/www/moodledata
+      - moodle_html:/var/www/html
+    depends_on:
+      - moodle
+    restart: unless-stopped
+    networks:
+      - moodle-network
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    container_name: moodle-mailpit
+    ports:
+      - "8025:8025"   # Web UI
+      - "1025:1025"   # SMTP
+    restart: unless-stopped
+    networks:
+      - moodle-network
+
+volumes:
+  moodle_data:
+  moodle_html:
+  mariadb_data:
+  redis_data:
+
+networks:
+  moodle-network:
+    driver: bridge
